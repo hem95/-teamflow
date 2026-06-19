@@ -1,0 +1,26 @@
+# Keep secrets and junk OUT of the Docker build image.
+# Without this, "COPY backend /app" would bake your local .env into the image.
+
+# Secret files (templates are fine and stay)
+.env
+*.env
+**/.env
+.env.prod
+.env.production
+
+# Git and editor noise
+.git
+.gitignore
+.vscode
+.idea
+
+# Python caches
+**/__pycache__
+**/*.pyc
+**/*.pyo
+
+# Uploaded files (provided by a volume at runtime, not baked in)
+uploads/
+
+# Docs not needed at runtime
+*.md

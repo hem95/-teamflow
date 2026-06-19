@@ -17,6 +17,8 @@ class MessageResponse(BaseModel):
     content: str
     channel_id: int
     user_id: int
+    display_name: Optional[str] = None   # author's name, joined from users table
+    username: Optional[str] = None
     is_edited: bool
     parent_id: Optional[int]
     created_at: datetime

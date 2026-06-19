@@ -85,7 +85,11 @@ async def websocket_channel(websocket: WebSocket, channel_id: int):
         await websocket.close(code=4001, reason="Invalid token")
         return
 
-    user_id = int(payload["sub"])
+    try:
+        user_id = int(payload["sub"])
+    except (KeyError, ValueError, TypeError):
+        await websocket.close(code=4001, reason="Invalid token")
+        return
 
     # ── Check channel membership ──────────────────────────────────────────
     async with AsyncSessionLocal() as db:
@@ -98,6 +102,15 @@ async def websocket_channel(websocket: WebSocket, channel_id: int):
         if not result.scalar_one_or_none():
             await websocket.close(code=4003, reason="Not a channel member")
             return
+
+        # Load the user so we can attach their name to every message they send
+        user_row = await db.execute(select(User).where(User.id == user_id))
+        user = user_row.scalar_one_or_none()
+        if not user or not user.is_active:
+            await websocket.close(code=4003, reason="User not found")
+            return
+        display_name = user.display_name
+        username = user.username
 
         # Mark user online
         await db.execute(update(User).where(User.id == user_id).values(is_online=True))
@@ -133,12 +146,40 @@ async def websocket_channel(websocket: WebSocket, channel_id: int):
                 if not content:
                     continue
 
+                # Enforce the same length limit as the database column (4000)
+                # so an oversized message can't crash the insert with a 500.
+                if len(content) > 4000:
+                    await websocket.send_json({
+                        "type": "error",
+                        "detail": "Message too long (max 4000 characters)",
+                    })
+                    continue
+
+                parent_id = data.get("parent_id")
+
                 async with AsyncSessionLocal() as db:
+                    # If this is a threaded reply, make sure the parent really
+                    # belongs to THIS channel — otherwise a client could attach
+                    # a reply to a message in a channel they can't see.
+                    if parent_id is not None:
+                        parent = await db.execute(
+                            select(Message).where(
+                                Message.id == parent_id,
+                                Message.channel_id == channel_id,
+                            )
+                        )
+                        if not parent.scalar_one_or_none():
+                            await websocket.send_json({
+                                "type": "error",
+                                "detail": "Parent message not found in this channel",
+                            })
+                            continue
+
                     message = Message(
                         channel_id=channel_id,
                         user_id=user_id,
                         content=content,
-                        parent_id=data.get("parent_id"),
+                        parent_id=parent_id,
                     )
                     db.add(message)
                     await db.flush()
@@ -150,6 +191,8 @@ async def websocket_channel(websocket: WebSocket, channel_id: int):
                         "id": message.id,
                         "content": message.content,
                         "user_id": message.user_id,
+                        "display_name": display_name,
+                        "username": username,
                         "channel_id": message.channel_id,
                         "parent_id": message.parent_id,
                         "created_at": message.created_at.isoformat(),

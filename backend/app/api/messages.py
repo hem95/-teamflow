@@ -37,6 +37,11 @@ async def get_messages(
     """
     await assert_channel_member(channel_id, current_user.id, db)
 
+    # Clamp pagination so a malicious client can't request a huge page
+    # (e.g. page_size=1000000) and exhaust the server's memory.
+    page = max(page, 1)
+    page_size = min(max(page_size, 1), 100)
+
     # Count total messages for pagination info
     count_result = await db.execute(
         select(func.count(Message.id)).where(
@@ -46,19 +51,32 @@ async def get_messages(
     )
     total = count_result.scalar()
 
-    # Fetch the page
+    # Fetch the page — join users so each message carries its author's name
     offset = (page - 1) * page_size
     result = await db.execute(
-        select(Message)
+        select(Message, User.display_name, User.username)
+        .join(User, User.id == Message.user_id)
         .where(Message.channel_id == channel_id, Message.parent_id == None)
         .order_by(Message.created_at.desc())
         .offset(offset)
         .limit(page_size)
     )
-    messages = result.scalars().all()
+    rows = result.all()
+
+    messages = [
+        MessageResponse(
+            **{k: getattr(m, k) for k in (
+                "id", "content", "channel_id", "user_id",
+                "is_edited", "parent_id", "created_at", "updated_at",
+            )},
+            display_name=display_name,
+            username=username,
+        )
+        for (m, display_name, username) in reversed(rows)
+    ]
 
     return PaginatedMessages(
-        messages=[MessageResponse.model_validate(m) for m in reversed(messages)],
+        messages=messages,
         total=total,
         page=page,
         page_size=page_size,
@@ -97,7 +115,18 @@ async def send_message(
     await db.flush()
     await db.refresh(message)
 
-    return message
+    return MessageResponse(
+        id=message.id,
+        content=message.content,
+        channel_id=message.channel_id,
+        user_id=message.user_id,
+        display_name=current_user.display_name,
+        username=current_user.username,
+        is_edited=message.is_edited,
+        parent_id=message.parent_id,
+        created_at=message.created_at,
+        updated_at=message.updated_at,
+    )
 
 
 @router.patch("/{message_id}", response_model=MessageResponse)

@@ -10,6 +10,12 @@ import re
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
+# A pre-computed hash we verify against when the email doesn't exist.
+# Running a real (failing) bcrypt check keeps the response time the same
+# whether or not the email is registered — closing a timing side-channel
+# that would otherwise let an attacker enumerate which emails have accounts.
+_DUMMY_HASH = hash_password("timing-attack-mitigation-placeholder")
+
 
 def slugify(text: str) -> str:
     """Turn 'My Cool Name' into 'my-cool-name' for use in URLs."""
@@ -60,9 +66,17 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == body.email))
     user = result.scalar_one_or_none()
 
-    # We check both conditions together to prevent timing attacks
-    # (an attacker shouldn't be able to tell if the email exists)
-    if not user or not verify_password(body.password, user.password_hash):
+    # Always run a password verification — against the real hash if the user
+    # exists, or a dummy hash if not — so the response takes the same time
+    # either way. This prevents attackers from discovering which emails are
+    # registered by timing the response.
+    if user:
+        password_ok = verify_password(body.password, user.password_hash)
+    else:
+        verify_password(body.password, _DUMMY_HASH)
+        password_ok = False
+
+    if not user or not password_ok:
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     if not user.is_active:

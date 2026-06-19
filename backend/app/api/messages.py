@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Request, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.database import get_db
@@ -6,10 +7,24 @@ from app.core.limiter import limiter
 from app.models.user import User
 from app.models.channel import ChannelMember
 from app.models.message import Message
-from app.schemas.message import MessageCreate, MessageUpdate, MessageResponse, PaginatedMessages
+from app.models.attachment import Attachment
+from app.schemas.message import (
+    MessageCreate, MessageUpdate, MessageResponse, PaginatedMessages, AttachmentInfo,
+)
 from app.core.dependencies import get_current_user
+from app.core.files import save_upload, attachment_url
 
 router = APIRouter(prefix="/channels/{channel_id}/messages", tags=["Messages"])
+
+
+def _attachment_info(att: Attachment) -> AttachmentInfo:
+    return AttachmentInfo(
+        id=att.id,
+        filename=att.filename,
+        url=attachment_url(att.stored_name),
+        content_type=att.content_type,
+        size=att.size,
+    )
 
 
 async def assert_channel_member(channel_id: int, user_id: int, db: AsyncSession):
@@ -64,6 +79,16 @@ async def get_messages(
     )
     rows = result.all()
 
+    # Load any attachments for these messages in one query, keyed by message id
+    message_ids = [m.id for (m, _dn, _un) in rows]
+    attachments_by_msg = {}
+    if message_ids:
+        att_rows = await db.execute(
+            select(Attachment).where(Attachment.message_id.in_(message_ids))
+        )
+        for att in att_rows.scalars().all():
+            attachments_by_msg[att.message_id] = _attachment_info(att)
+
     messages = [
         MessageResponse(
             **{k: getattr(m, k) for k in (
@@ -72,6 +97,7 @@ async def get_messages(
             )},
             display_name=display_name,
             username=username,
+            attachment=attachments_by_msg.get(m.id),
         )
         for (m, display_name, username) in reversed(rows)
     ]
@@ -127,6 +153,79 @@ async def send_message(
         username=current_user.username,
         is_edited=message.is_edited,
         parent_id=message.parent_id,
+        created_at=message.created_at,
+        updated_at=message.updated_at,
+    )
+
+
+@router.post("/upload", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("20/minute")
+async def upload_file(
+    request: Request,
+    channel_id: int,
+    file: UploadFile = File(...),
+    caption: Optional[str] = Form(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Upload a file to a channel. Creates a message (with optional caption text)
+    and attaches the file to it, then broadcasts it live to everyone connected.
+    """
+    await assert_channel_member(channel_id, current_user.id, db)
+
+    # Save the file to disk first (streams + enforces the size limit)
+    stored_name, size = await save_upload(file)
+
+    # Create the message that carries the file
+    message = Message(
+        channel_id=channel_id,
+        user_id=current_user.id,
+        content=(caption or "").strip(),
+    )
+    db.add(message)
+    await db.flush()
+
+    attachment = Attachment(
+        message_id=message.id,
+        uploader_id=current_user.id,
+        filename=file.filename or stored_name,
+        stored_name=stored_name,
+        content_type=file.content_type or "application/octet-stream",
+        size=size,
+    )
+    db.add(attachment)
+    await db.flush()
+    await db.refresh(message)
+    await db.refresh(attachment)
+
+    att_info = _attachment_info(attachment)
+
+    # Broadcast to others connected to this channel so the file appears live
+    from app.api.websocket import manager
+    await manager.broadcast(channel_id, {
+        "type": "message",
+        "id": message.id,
+        "content": message.content,
+        "user_id": message.user_id,
+        "display_name": current_user.display_name,
+        "username": current_user.username,
+        "channel_id": message.channel_id,
+        "parent_id": message.parent_id,
+        "attachment": att_info.model_dump(),
+        "created_at": message.created_at.isoformat(),
+    })
+
+    return MessageResponse(
+        id=message.id,
+        content=message.content,
+        channel_id=message.channel_id,
+        user_id=message.user_id,
+        display_name=current_user.display_name,
+        username=current_user.username,
+        is_edited=message.is_edited,
+        parent_id=message.parent_id,
+        attachment=att_info,
         created_at=message.created_at,
         updated_at=message.updated_at,
     )

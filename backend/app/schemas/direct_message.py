@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional, List
+from app.schemas.message import AttachmentInfo
 
 
 class StartDMRequest(BaseModel):
@@ -37,6 +38,7 @@ class DirectMessageResponse(BaseModel):
     username: Optional[str] = None
     content: str
     is_edited: bool
+    attachment: Optional[AttachmentInfo] = None
     created_at: datetime
     updated_at: Optional[datetime]
 

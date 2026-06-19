@@ -152,6 +152,7 @@ async function selectChannel(channelId) {
   document.getElementById("message-input").placeholder = `Message #${state.activeChannel?.name}`;
   document.getElementById("message-input").disabled = false;
   document.getElementById("send-btn").disabled = false;
+  document.getElementById("attach-btn").disabled = false;
   document.getElementById("empty-state")?.remove();
 
   await loadMessages(channelId);
@@ -195,6 +196,7 @@ async function selectDM(conversationId) {
   document.getElementById("message-input").placeholder = `Message ${otherName}`;
   document.getElementById("message-input").disabled = false;
   document.getElementById("send-btn").disabled = false;
+  document.getElementById("attach-btn").disabled = false;
   document.getElementById("empty-state")?.remove();
 
   await loadDMMessages(conversationId);
@@ -282,6 +284,11 @@ function appendMessage(msg, animate = true) {
   const name = msg.display_name || `User ${msg.user_id}`;
   const time = new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
+  const contentHtml = msg.content
+    ? `<div class="msg-content">${escapeHtml(msg.content)}</div>`
+    : "";
+  const attachmentHtml = msg.attachment ? renderAttachment(msg.attachment) : "";
+
   div.innerHTML = `
     <div class="msg-avatar">${initials}</div>
     <div class="msg-body">
@@ -289,7 +296,8 @@ function appendMessage(msg, animate = true) {
         <span class="msg-name">${escapeHtml(name)}</span>
         <span class="msg-time">${time}</span>
       </div>
-      <div class="msg-content">${escapeHtml(msg.content)}</div>
+      ${contentHtml}
+      ${attachmentHtml}
       ${msg.is_edited ? '<span class="msg-edited">(edited)</span>' : ""}
       ${state.mode === "channel" ? `<button class="msg-reply-btn" onclick="setThread(${msg.id})">↩ Reply in thread</button>` : ""}
     </div>
@@ -336,6 +344,75 @@ async function sendMessage() {
       }
     }
   }
+}
+
+// ── File Uploads ────────────────────────────────────────────────────────────
+async function handleFileSelected(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  // Reset the input so selecting the same file again still fires onchange
+  event.target.value = "";
+
+  // Client-side size guard (server enforces it too) — 10 MB
+  if (file.size > 10 * 1024 * 1024) {
+    showUploadStatus("File is too large (max 10 MB)", true);
+    return;
+  }
+
+  // Pick the right endpoint based on whether a channel or DM is open
+  let path;
+  if (state.mode === "dm" && state.activeDM) {
+    path = `/api/dm/${state.activeDM.id}/upload`;
+  } else if (state.mode === "channel" && state.activeChannel) {
+    path = `/api/channels/${state.activeChannel.id}/messages/upload`;
+  } else {
+    return;
+  }
+
+  // FormData lets us send the file as multipart/form-data.
+  // We also pass any text currently typed as the caption.
+  const input = document.getElementById("message-input");
+  const formData = new FormData();
+  formData.append("file", file);
+  if (input.value.trim()) formData.append("caption", input.value.trim());
+
+  showUploadStatus(`Uploading ${file.name}...`, false);
+
+  // Note: don't set Content-Type — the browser sets it (with the boundary)
+  const token = localStorage.getItem("access_token");
+  const res = await fetch(`${API}${path}`, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${token}` },
+    body: formData,
+  });
+
+  if (res.ok) {
+    const msg = await res.json();
+    input.value = "";
+    autoResize(input);
+    appendMessage(msg);
+    scrollToBottom();
+    hideUploadStatus();
+  } else if (res.status === 413) {
+    showUploadStatus("File is too large (max 10 MB)", true);
+  } else if (res.status === 429) {
+    showUploadStatus("Too many uploads, please wait a minute", true);
+  } else {
+    showUploadStatus("Upload failed", true);
+  }
+}
+
+function showUploadStatus(text, isError) {
+  const el = document.getElementById("upload-status");
+  el.textContent = text;
+  el.classList.remove("hidden");
+  el.style.color = isError ? "var(--error)" : "var(--text-muted)";
+  if (isError) setTimeout(hideUploadStatus, 4000);
+}
+
+function hideUploadStatus() {
+  document.getElementById("upload-status").classList.add("hidden");
 }
 
 function handleInputKeydown(e) {
@@ -452,4 +529,32 @@ function escapeHtml(str) {
   const div = document.createElement("div");
   div.appendChild(document.createTextNode(str));
   return div.innerHTML;
+}
+
+// Render a file attachment: images show a preview, everything else shows
+// a downloadable file chip.
+function renderAttachment(att) {
+  const url = escapeHtml(att.url);
+  const name = escapeHtml(att.filename);
+  const size = formatBytes(att.size);
+
+  if (att.content_type && att.content_type.startsWith("image/")) {
+    return `<a href="${url}" target="_blank" class="msg-image-link">
+      <img src="${url}" alt="${name}" class="msg-image" />
+    </a>`;
+  }
+
+  return `<a href="${url}" target="_blank" download class="msg-file">
+    <span class="msg-file-icon">📄</span>
+    <span class="msg-file-meta">
+      <span class="msg-file-name">${name}</span>
+      <span class="msg-file-size">${size}</span>
+    </span>
+  </a>`;
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

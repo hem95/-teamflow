@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60       # access token lives 1 hour
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7          # refresh token lives 7 days
 
+    # ── File uploads ──────────────────────────────────────────────────────
+    UPLOAD_DIR: str = "/uploads"                 # where files are saved on disk
+    MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024      # 10 MB per file
+
     # ── Database ──────────────────────────────────────────────────────────
     # asyncpg is the async PostgreSQL driver; format: user:password@host/db
     DATABASE_URL: str = "postgresql+asyncpg://teamflow:teamflow@db:5432/teamflow"

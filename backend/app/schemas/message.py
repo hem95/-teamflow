@@ -12,6 +12,15 @@ class MessageUpdate(BaseModel):
     content: str
 
 
+class AttachmentInfo(BaseModel):
+    """File attached to a message — what the frontend needs to display it."""
+    id: int
+    filename: str
+    url: str            # where to download/view it, e.g. /uploads/abc.png
+    content_type: str
+    size: int
+
+
 class MessageResponse(BaseModel):
     id: int
     content: str
@@ -21,6 +30,7 @@ class MessageResponse(BaseModel):
     username: Optional[str] = None
     is_edited: bool
     parent_id: Optional[int]
+    attachment: Optional[AttachmentInfo] = None
     created_at: datetime
     updated_at: Optional[datetime]
 

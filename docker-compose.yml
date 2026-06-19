@@ -52,8 +52,10 @@ services:
     volumes:
       - ./backend:/app               # backend code
       - ./frontend:/frontend         # frontend served directly by FastAPI
+      - uploads_data:/uploads        # uploaded files persist here
 
 # Named volumes — Docker manages where data is stored on disk
 volumes:
   postgres_data:
   redis_data:
+  uploads_data:

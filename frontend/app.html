@@ -72,7 +72,11 @@
       <div id="thread-reply-banner" class="reply-banner hidden">
         Replying in thread · <button onclick="clearThread()">Cancel</button>
       </div>
+      <div id="upload-status" class="upload-status hidden"></div>
       <div class="input-row">
+        <input type="file" id="file-input" class="hidden" onchange="handleFileSelected(event)" />
+        <button class="attach-btn" onclick="document.getElementById('file-input').click()"
+                id="attach-btn" title="Attach a file" disabled>📎</button>
         <textarea
           id="message-input"
           placeholder="Message #channel"

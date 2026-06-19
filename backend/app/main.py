@@ -70,6 +70,12 @@ async def health_check():
     """Simple endpoint to check if the server is running."""
     return {"status": "ok", "app": settings.APP_NAME}
 
+# Serve uploaded files. This MUST be mounted before the catch-all "/" mount
+# below — otherwise "/" would match first and uploads would 404.
+import os
+os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
+
 # Serve the frontend files directly from FastAPI
 # This means everything runs on port 8000 — no nginx needed, no CORS issues
 app.mount("/", StaticFiles(directory="/frontend", html=True), name="frontend")

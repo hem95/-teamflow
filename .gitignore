@@ -36,6 +36,9 @@ desktop.ini
 *.swp
 *.swo
 
+# ── Uploaded files (stored in a Docker volume, not in git) ─────────────────
+uploads/
+
 # ── Logs ──────────────────────────────────────────────────────────────────
 *.log
 logs/

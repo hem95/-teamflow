@@ -1,17 +1,31 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Request, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.database import get_db
 from app.models.user import User
 from app.models.direct_message import DMConversation, DMParticipant, DirectMessage
+from app.models.attachment import Attachment
+from app.schemas.message import AttachmentInfo
 from app.schemas.direct_message import (
     StartDMRequest, DMUser, DMConversationResponse,
     DirectMessageCreate, DirectMessageResponse, PaginatedDirectMessages,
 )
 from app.core.dependencies import get_current_user
 from app.core.limiter import limiter
+from app.core.files import save_upload, attachment_url
 
 router = APIRouter(prefix="/dm", tags=["Direct Messages"])
+
+
+def _attachment_info(att: Attachment) -> AttachmentInfo:
+    return AttachmentInfo(
+        id=att.id,
+        filename=att.filename,
+        url=attachment_url(att.stored_name),
+        content_type=att.content_type,
+        size=att.size,
+    )
 
 
 async def assert_participant(conversation_id: int, user_id: int, db: AsyncSession):
@@ -156,6 +170,16 @@ async def get_dm_messages(
     )
     rows = result.all()
 
+    # Load attachments for these DM messages in one query
+    message_ids = [m.id for (m, _dn, _un) in rows]
+    attachments_by_msg = {}
+    if message_ids:
+        att_rows = await db.execute(
+            select(Attachment).where(Attachment.dm_message_id.in_(message_ids))
+        )
+        for att in att_rows.scalars().all():
+            attachments_by_msg[att.dm_message_id] = _attachment_info(att)
+
     messages = [
         DirectMessageResponse(
             **{k: getattr(m, k) for k in (
@@ -164,6 +188,7 @@ async def get_dm_messages(
             )},
             display_name=display_name,
             username=username,
+            attachment=attachments_by_msg.get(m.id),
         )
         for (m, display_name, username) in reversed(rows)
     ]
@@ -211,6 +236,72 @@ async def send_dm(
         username=current_user.username,
         content=message.content,
         is_edited=message.is_edited,
+        created_at=message.created_at,
+        updated_at=message.updated_at,
+    )
+
+
+@router.post("/{conversation_id}/upload", response_model=DirectMessageResponse,
+             status_code=status.HTTP_201_CREATED)
+@limiter.limit("20/minute")
+async def upload_dm_file(
+    request: Request,
+    conversation_id: int,
+    file: UploadFile = File(...),
+    caption: Optional[str] = Form(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload a file into a DM conversation and broadcast it live."""
+    await assert_participant(conversation_id, current_user.id, db)
+
+    stored_name, size = await save_upload(file)
+
+    message = DirectMessage(
+        conversation_id=conversation_id,
+        user_id=current_user.id,
+        content=(caption or "").strip(),
+    )
+    db.add(message)
+    await db.flush()
+
+    attachment = Attachment(
+        dm_message_id=message.id,
+        uploader_id=current_user.id,
+        filename=file.filename or stored_name,
+        stored_name=stored_name,
+        content_type=file.content_type or "application/octet-stream",
+        size=size,
+    )
+    db.add(attachment)
+    await db.flush()
+    await db.refresh(message)
+    await db.refresh(attachment)
+
+    att_info = _attachment_info(attachment)
+
+    from app.api.websocket import dm_manager
+    await dm_manager.broadcast(conversation_id, {
+        "type": "message",
+        "id": message.id,
+        "content": message.content,
+        "user_id": message.user_id,
+        "display_name": current_user.display_name,
+        "username": current_user.username,
+        "conversation_id": message.conversation_id,
+        "attachment": att_info.model_dump(),
+        "created_at": message.created_at.isoformat(),
+    })
+
+    return DirectMessageResponse(
+        id=message.id,
+        conversation_id=message.conversation_id,
+        user_id=message.user_id,
+        display_name=current_user.display_name,
+        username=current_user.username,
+        content=message.content,
+        is_edited=message.is_edited,
+        attachment=att_info,
         created_at=message.created_at,
         updated_at=message.updated_at,
     )

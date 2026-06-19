@@ -160,6 +160,29 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 .btn-secondary:hover { background: rgba(255,255,255,.06); }
 .modal .btn-primary { margin-top: 0; flex: 1; }
 
+/* ── Attach button + upload status ──────────────────────────────────────── */
+.attach-btn { background: var(--input-bg); border: 1px solid var(--border);
+              color: var(--text); border-radius: 8px; padding: 10px 12px;
+              cursor: pointer; font-size: 1rem; }
+.attach-btn:disabled { opacity: 0.5; cursor: default; }
+.attach-btn:not(:disabled):hover { background: rgba(255,255,255,.06); }
+.upload-status { font-size: 0.82rem; color: var(--text-muted); padding: 0 4px 8px; }
+
+/* ── Message attachments ────────────────────────────────────────────────── */
+.msg-image-link { display: inline-block; margin-top: 6px; }
+.msg-image { max-width: 360px; max-height: 300px; border-radius: 8px;
+             border: 1px solid var(--border); display: block; }
+.msg-file { display: inline-flex; align-items: center; gap: 10px; margin-top: 6px;
+            background: var(--input-bg); border: 1px solid var(--border);
+            border-radius: 8px; padding: 10px 14px; text-decoration: none;
+            color: var(--text); max-width: 320px; }
+.msg-file:hover { background: rgba(255,255,255,.06); }
+.msg-file-icon { font-size: 1.4rem; }
+.msg-file-meta { display: flex; flex-direction: column; min-width: 0; }
+.msg-file-name { font-weight: 600; font-size: 0.88rem; color: var(--white);
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-file-size { font-size: 0.75rem; color: var(--text-muted); }
+
 /* ── Utilities ──────────────────────────────────────────────────────────── */
 .hidden { display: none !important; }
 

@@ -1,0 +1,89 @@
+# Production stack — run on your cloud server with:
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Differences from the dev setup (docker-compose.yml):
+#   - Frontend + backend are baked into the image (no host bind mounts)
+#   - Database & Redis are NOT exposed to the internet (internal network only)
+#   - Secrets come from a root .env file (copy from .env.prod.example)
+#   - Caddy sits in front and provides automatic HTTPS for your domain
+#   - ENVIRONMENT=production turns on the safety checks in config.py
+
+services:
+
+  # ── PostgreSQL ───────────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: teamflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}   # from root .env
+      POSTGRES_DB: teamflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # NOTE: no "ports:" — the database is only reachable on the internal
+    # Docker network, never from the public internet.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U teamflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: always
+    volumes:
+      - redis_data:/data
+    # Also no "ports:" — internal only.
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Backend (FastAPI + frontend baked in) ────────────────────────────────
+  backend:
+    build:
+      context: .                    # repo root, so the image can include frontend
+      dockerfile: Dockerfile.prod
+    restart: always
+    environment:
+      APP_NAME: TeamFlow
+      ENVIRONMENT: production
+      DEBUG: "false"
+      SECRET_KEY: ${SECRET_KEY}
+      DATABASE_URL: postgresql+asyncpg://teamflow:${POSTGRES_PASSWORD}@db:5432/teamflow
+      REDIS_URL: redis://redis:6379
+      ALLOWED_ORIGINS: '["https://${DOMAIN}"]'
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - uploads_data:/uploads       # uploaded files persist here
+    # No public "ports:" — only Caddy talks to the backend, internally.
+
+  # ── Caddy (reverse proxy + automatic HTTPS) ──────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+      EMAIL: ${EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data            # stores the TLS certificates
+      - caddy_config:/config
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  redis_data:
+  uploads_data:
+  caddy_data:
+  caddy_config:

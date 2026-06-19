@@ -1,7 +1,11 @@
 # ── Secrets ───────────────────────────────────────────────────────────────
-# NEVER commit .env — it contains your database password and secret key
+# NEVER commit real secret files — they contain passwords and keys.
+# The *.example templates are safe and ARE committed.
 .env
 *.env
+.env.prod
+.env.production
+!*.example
 
 # ── Python ────────────────────────────────────────────────────────────────
 __pycache__/

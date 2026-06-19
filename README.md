@@ -205,6 +205,62 @@ Without Docker, every person running this project needs to manually install the 
 
 ---
 
+## Deploying to Production (Cloud)
+
+The local setup (`docker-compose.yml`) is built for development convenience and is
+**not safe to expose to the internet**. A separate production setup fixes that.
+
+### What's different in production
+
+| Concern | Dev (`docker-compose.yml`) | Prod (`docker-compose.prod.yml`) |
+|---------|---------------------------|----------------------------------|
+| Frontend | Mounted from your disk | Baked into the image (`Dockerfile.prod`) |
+| HTTPS | None (plain http) | Automatic via Caddy + Let's Encrypt |
+| Database/Redis ports | Exposed to host | Internal network only |
+| Secrets | Weak defaults | Required strong values, enforced at startup |
+| CORS | Localhost | Locked to your domain |
+| Workers | 4 (splits WebSockets) | 1 (keeps real-time working) |
+
+### Steps
+
+**1. Get a server** (any cloud VPS — DigitalOcean, Hetzner, AWS EC2, etc.) running
+Linux with Docker installed. Point your domain's DNS **A record** at its public IP.
+Open ports **80** and **443**.
+
+**2. Clone the repo on the server**
+```bash
+git clone https://github.com/hem95/-teamflow.git
+cd -teamflow
+```
+
+**3. Create the production secrets file**
+```bash
+cp .env.prod.example .env
+nano .env   # fill in SECRET_KEY, POSTGRES_PASSWORD, DOMAIN, EMAIL
+```
+Generate strong values:
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"      # SECRET_KEY
+python -c "import secrets; print(secrets.token_urlsafe(24))"  # POSTGRES_PASSWORD
+```
+
+**4. Launch**
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+**5. Visit `https://yourdomain.com`** — Caddy fetches the HTTPS certificate
+automatically on first request (may take a few seconds).
+
+### Still to harden later (documented honestly)
+
+- **Uploads on local disk** — fine for one server; move to S3 / Cloudflare R2 before scaling out
+- **Single worker** — to run multiple workers or servers, broadcast WebSocket events through Redis pub/sub
+- **`create_all` schema** — switch to Alembic migrations before changing tables on a live database
+- **Uploaded file serving** — serve from a separate domain or force download disposition to neutralise malicious HTML uploads
+
+---
+
 ## Scaling to Thousands of Users
 
 The architecture is designed to grow:
@@ -219,8 +275,8 @@ The architecture is designed to grow:
 
 ## What Could Be Added Next
 
-- [ ] Direct messages between users
-- [ ] File and image uploads
+- [x] Direct messages between users
+- [x] File and image uploads
 - [ ] Push notifications when mentioned
 - [ ] User profile pictures
 - [ ] Message reactions (emoji)

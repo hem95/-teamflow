@@ -1,0 +1,18 @@
+# Caddy automatically obtains and renews a free HTTPS certificate from
+# Let's Encrypt for your domain — no manual certificate work needed.
+#
+# Requirements for this to work:
+#   - Your domain's DNS A record points to this server's public IP
+#   - Ports 80 and 443 are open on the server's firewall
+
+{$DOMAIN} {
+	# Compress responses
+	encode gzip
+
+	# Forward everything to the backend. Caddy upgrades WebSocket
+	# connections (/ws/...) automatically, so real-time messaging works.
+	reverse_proxy backend:8000
+
+	# Email used by Let's Encrypt for expiry notices
+	tls {$EMAIL}
+}

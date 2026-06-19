@@ -47,7 +47,10 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # Browsers block requests from one domain to another unless the server allows it
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # open for development — restrict to your domain in production
+    # Restricted to the origins listed in settings (your real domain in prod).
+    # The frontend is served from the same origin as the API, so same-origin
+    # requests aren't affected by this list at all — it only governs other sites.
+    allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -80,9 +80,66 @@ function connectWS(channelId) {
   }, 30_000);
 }
 
+// Connect to a DM conversation. Same logic as connectWS, but points at the
+// /ws/dm/ endpoint and reconnects only while that DM is still open.
+function connectDM(conversationId) {
+  const token = localStorage.getItem("access_token");
+  if (!token) return;
+
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  const url = `${protocol}//${location.host}/ws/dm/${conversationId}?token=${token}`;
+
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    console.log(`[WS] Connected to DM ${conversationId}`);
+    reconnectDelay = 1000;
+  };
+
+  ws.onmessage = (event) => {
+    const payload = JSON.parse(event.data);
+    switch (payload.type) {
+      case "message":
+        handleIncomingMessage(payload);
+        break;
+      case "typing":
+        showTypingIndicator(payload.user_id);
+        break;
+      case "pong":
+        break;
+      case "error":
+        console.error("[WS] Server error:", payload.detail);
+        break;
+    }
+  };
+
+  ws.onerror = (err) => console.error("[WS] Error:", err);
+
+  ws.onclose = (event) => {
+    ws = null;
+    if (event.code === 4001 || event.code === 4003) {
+      console.warn("[WS] DM closed due to auth/permission error");
+      return;
+    }
+    console.log(`[WS] DM disconnected, reconnecting in ${reconnectDelay}ms...`);
+    setTimeout(() => {
+      if (state.mode === "dm" && state.activeDM?.id === conversationId) {
+        connectDM(conversationId);
+      }
+    }, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, 8000);
+  };
+
+  setInterval(() => {
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "ping" }));
+    }
+  }, 30_000);
+}
+
 function disconnectWS() {
   if (ws) {
-    ws.close(1000, "Channel switch");
+    ws.close(1000, "Conversation switch");
     ws = null;
   }
 }

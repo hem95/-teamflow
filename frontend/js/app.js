@@ -4,8 +4,11 @@ let state = {
   user:            null,
   workspaces:      [],
   channels:        [],
+  dms:             [],     // direct message conversations
   activeWorkspace: null,
   activeChannel:   null,
+  activeDM:        null,   // the open DM conversation, if any
+  mode:            "channel",  // "channel" or "dm" — what the chat area is showing
   activeThreadId:  null,   // for threaded replies
 };
 
@@ -19,6 +22,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   renderUserInfo();
   await loadWorkspaces();
+  await loadDMs();
 });
 
 // ── API Helper ────────────────────────────────────────────────────────────
@@ -133,14 +137,17 @@ async function selectChannel(channelId) {
   // Disconnect old WebSocket
   disconnectWS();
 
+  state.mode = "channel";
+  state.activeDM = null;
   state.activeChannel = state.channels.find(c => c.id === channelId);
   state.activeThreadId = null;
   clearThread();
 
-  // Update active nav link
-  document.querySelectorAll("#channel-list a").forEach(a => a.classList.remove("active"));
+  // Update active nav link (clear DM highlights too)
+  document.querySelectorAll("#channel-list a, #dm-list a").forEach(a => a.classList.remove("active"));
   document.getElementById(`ch-link-${channelId}`)?.classList.add("active");
 
+  document.querySelector(".channel-hash").style.display = "";
   document.getElementById("channel-name").textContent = state.activeChannel?.name || "";
   document.getElementById("message-input").placeholder = `Message #${state.activeChannel?.name}`;
   document.getElementById("message-input").disabled = false;
@@ -149,6 +156,104 @@ async function selectChannel(channelId) {
 
   await loadMessages(channelId);
   connectWS(channelId);
+}
+
+// ── Direct Messages ─────────────────────────────────────────────────────────
+async function loadDMs() {
+  const res = await apiFetch("/api/dm");
+  if (!res) return;
+  state.dms = await res.json();
+
+  const list = document.getElementById("dm-list");
+  list.innerHTML = "";
+
+  for (const dm of state.dms) {
+    const li = document.createElement("li");
+    const dot = dm.other_user.is_online ? "🟢" : "⚪";
+    li.innerHTML = `<a onclick="selectDM(${dm.id})" id="dm-link-${dm.id}">
+      <span>${dot}</span> ${escapeHtml(dm.other_user.display_name)}
+    </a>`;
+    list.appendChild(li);
+  }
+}
+
+async function selectDM(conversationId) {
+  disconnectWS();
+
+  state.mode = "dm";
+  state.activeChannel = null;
+  state.activeDM = state.dms.find(d => d.id === conversationId);
+  state.activeThreadId = null;
+  clearThread();
+
+  document.querySelectorAll("#channel-list a, #dm-list a").forEach(a => a.classList.remove("active"));
+  document.getElementById(`dm-link-${conversationId}`)?.classList.add("active");
+
+  const otherName = state.activeDM?.other_user?.display_name || "";
+  document.querySelector(".channel-hash").style.display = "none";  // no # for DMs
+  document.getElementById("channel-name").textContent = otherName;
+  document.getElementById("message-input").placeholder = `Message ${otherName}`;
+  document.getElementById("message-input").disabled = false;
+  document.getElementById("send-btn").disabled = false;
+  document.getElementById("empty-state")?.remove();
+
+  await loadDMMessages(conversationId);
+  connectDM(conversationId);
+}
+
+async function loadDMMessages(conversationId) {
+  const container = document.getElementById("messages-container");
+  container.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px">Loading...</div>';
+
+  const res = await apiFetch(`/api/dm/${conversationId}/messages?page=1&page_size=50`);
+  if (!res) return;
+  const data = await res.json();
+
+  container.innerHTML = "";
+  for (const msg of data.messages) {
+    appendMessage(msg, false);
+  }
+  scrollToBottom();
+}
+
+function showNewDMModal() {
+  document.getElementById("modal-content").innerHTML = `
+    <h2>New Direct Message</h2>
+    <div class="form-group">
+      <label>Username</label>
+      <input type="text" id="dm-username-input" placeholder="who do you want to message?" />
+    </div>
+    <div id="dm-error" class="error-msg hidden"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeModal()">Cancel</button>
+      <button class="btn-primary" onclick="startDM()">Start chat</button>
+    </div>
+  `;
+  document.getElementById("modal-overlay").classList.remove("hidden");
+}
+
+async function startDM() {
+  const username = document.getElementById("dm-username-input").value.trim().toLowerCase();
+  if (!username) return;
+
+  const res = await apiFetch("/api/dm/start", {
+    method: "POST",
+    body: JSON.stringify({ username }),
+  });
+
+  if (!res) return;
+  if (!res.ok) {
+    const data = await res.json();
+    const el = document.getElementById("dm-error");
+    el.textContent = data.detail || "Could not start chat";
+    el.classList.remove("hidden");
+    return;
+  }
+
+  const convo = await res.json();
+  closeModal();
+  await loadDMs();
+  selectDM(convo.id);
 }
 
 // ── Messages ──────────────────────────────────────────────────────────────
@@ -186,7 +291,7 @@ function appendMessage(msg, animate = true) {
       </div>
       <div class="msg-content">${escapeHtml(msg.content)}</div>
       ${msg.is_edited ? '<span class="msg-edited">(edited)</span>' : ""}
-      <button class="msg-reply-btn" onclick="setThread(${msg.id})">↩ Reply in thread</button>
+      ${state.mode === "channel" ? `<button class="msg-reply-btn" onclick="setThread(${msg.id})">↩ Reply in thread</button>` : ""}
     </div>
   `;
 
@@ -198,21 +303,37 @@ function appendMessage(msg, animate = true) {
 async function sendMessage() {
   const input = document.getElementById("message-input");
   const content = input.value.trim();
-  if (!content || !state.activeChannel) return;
+  if (!content) return;
+
+  // Nothing open to send to
+  if (state.mode === "channel" && !state.activeChannel) return;
+  if (state.mode === "dm" && !state.activeDM) return;
 
   input.value = "";
   autoResize(input);
 
-  // Try WebSocket first (instant), fall back to HTTP
-  if (!sendViaWS({ type: "message", content, parent_id: state.activeThreadId || null })) {
-    const res = await apiFetch(`/api/channels/${state.activeChannel.id}/messages`, {
-      method: "POST",
-      body: JSON.stringify({ content, parent_id: state.activeThreadId || null }),
-    });
-    if (res?.ok) {
-      const msg = await res.json();
-      appendMessage(msg);
-      scrollToBottom();
+  // Try WebSocket first (instant); fall back to HTTP if the socket is down
+  if (state.mode === "dm") {
+    if (!sendViaWS({ type: "message", content })) {
+      const res = await apiFetch(`/api/dm/${state.activeDM.id}/messages`, {
+        method: "POST",
+        body: JSON.stringify({ content }),
+      });
+      if (res?.ok) {
+        appendMessage(await res.json());
+        scrollToBottom();
+      }
+    }
+  } else {
+    if (!sendViaWS({ type: "message", content, parent_id: state.activeThreadId || null })) {
+      const res = await apiFetch(`/api/channels/${state.activeChannel.id}/messages`, {
+        method: "POST",
+        body: JSON.stringify({ content, parent_id: state.activeThreadId || null }),
+      });
+      if (res?.ok) {
+        appendMessage(await res.json());
+        scrollToBottom();
+      }
     }
   }
 }

@@ -7,6 +7,7 @@ from app.database import get_db, AsyncSessionLocal
 from app.models.user import User
 from app.models.channel import ChannelMember
 from app.models.message import Message
+from app.models.direct_message import DMParticipant, DirectMessage
 from app.core.security import decode_token
 
 router = APIRouter(tags=["WebSocket"])
@@ -61,6 +62,11 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
+
+# A separate manager for DMs. Using its own instance means a conversation
+# with id 5 and a channel with id 5 never get mixed up — their connection
+# sets are kept completely apart.
+dm_manager = ConnectionManager()
 
 
 @router.websocket("/ws/channels/{channel_id}")
@@ -226,3 +232,112 @@ async def websocket_channel(websocket: WebSocket, channel_id: int):
             "channel_id": channel_id,
             "online_count": manager.connection_count(channel_id),
         })
+
+
+@router.websocket("/ws/dm/{conversation_id}")
+async def websocket_dm(websocket: WebSocket, conversation_id: int):
+    """
+    Real-time endpoint for direct messages.
+    Same pattern as the channel socket, but checks DM participation
+    instead of channel membership and uses dm_manager.
+
+    Connect with:  ws://server/ws/dm/3?token=<jwt>
+    """
+    # ── Authenticate ──────────────────────────────────────────────────────
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=4001, reason="Missing token")
+        return
+
+    payload = decode_token(token)
+    if not payload or payload.get("type") != "access":
+        await websocket.close(code=4001, reason="Invalid token")
+        return
+
+    try:
+        user_id = int(payload["sub"])
+    except (KeyError, ValueError, TypeError):
+        await websocket.close(code=4001, reason="Invalid token")
+        return
+
+    # ── Check the user is part of this conversation ───────────────────────
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(DMParticipant).where(
+                DMParticipant.conversation_id == conversation_id,
+                DMParticipant.user_id == user_id,
+            )
+        )
+        if not result.scalar_one_or_none():
+            await websocket.close(code=4003, reason="Not part of this conversation")
+            return
+
+        user_row = await db.execute(select(User).where(User.id == user_id))
+        user = user_row.scalar_one_or_none()
+        if not user or not user.is_active:
+            await websocket.close(code=4003, reason="User not found")
+            return
+        display_name = user.display_name
+        username = user.username
+
+    await dm_manager.connect(websocket, conversation_id)
+
+    try:
+        while True:
+            raw = await websocket.receive_text()
+
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                await websocket.send_json({"type": "error", "detail": "Invalid JSON"})
+                continue
+
+            msg_type = data.get("type")
+
+            if msg_type == "message":
+                content = (data.get("content") or "").strip()
+                if not content:
+                    continue
+                if len(content) > 4000:
+                    await websocket.send_json({
+                        "type": "error",
+                        "detail": "Message too long (max 4000 characters)",
+                    })
+                    continue
+
+                async with AsyncSessionLocal() as db:
+                    message = DirectMessage(
+                        conversation_id=conversation_id,
+                        user_id=user_id,
+                        content=content,
+                    )
+                    db.add(message)
+                    await db.flush()
+                    await db.refresh(message)
+                    await db.commit()
+
+                    broadcast_payload = {
+                        "type": "message",
+                        "id": message.id,
+                        "content": message.content,
+                        "user_id": message.user_id,
+                        "display_name": display_name,
+                        "username": username,
+                        "conversation_id": message.conversation_id,
+                        "created_at": message.created_at.isoformat(),
+                    }
+
+                await dm_manager.broadcast(conversation_id, broadcast_payload)
+
+            elif msg_type == "typing":
+                await dm_manager.broadcast(conversation_id, {
+                    "type": "typing",
+                    "user_id": user_id,
+                    "conversation_id": conversation_id,
+                }, exclude=websocket)
+
+            elif msg_type == "ping":
+                await websocket.send_json({"type": "pong"})
+
+    except WebSocketDisconnect:
+        dm_manager.disconnect(websocket, conversation_id)

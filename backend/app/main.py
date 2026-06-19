@@ -12,7 +12,7 @@ from app.core.limiter import limiter
 import app.models  # noqa: F401
 
 # Import routers
-from app.api import auth, workspaces, channels, messages, websocket
+from app.api import auth, workspaces, channels, messages, websocket, direct_messages
 
 
 @asynccontextmanager
@@ -59,6 +59,7 @@ app.include_router(auth.router,        prefix="/api")
 app.include_router(workspaces.router,  prefix="/api")
 app.include_router(channels.router,    prefix="/api")
 app.include_router(messages.router,    prefix="/api")
+app.include_router(direct_messages.router, prefix="/api")
 
 # WebSocket (no /api prefix — browsers use ws:// not http://)
 app.include_router(websocket.router)

@@ -1,0 +1,59 @@
+version: "3.9"
+
+# Docker Compose defines all the "services" (containers) that run together.
+# Think of each service as a separate computer that can talk to each other.
+
+services:
+
+  # ── PostgreSQL Database ──────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine          # official PostgreSQL image
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: teamflow
+      POSTGRES_PASSWORD: teamflow      # change this in production!
+      POSTGRES_DB: teamflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data   # persist data between restarts
+    ports:
+      - "5432:5432"                    # expose so you can connect with a DB tool
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U teamflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis (real-time broadcasting) ──────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── FastAPI Backend ──────────────────────────────────────────────────────────
+  backend:
+    build: ./backend               # builds from backend/Dockerfile
+    restart: unless-stopped
+    env_file: ./backend/.env       # reads secrets from .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy   # wait for postgres to be ready
+      redis:
+        condition: service_healthy   # wait for redis to be ready
+    volumes:
+      - ./backend:/app               # backend code
+      - ./frontend:/frontend         # frontend served directly by FastAPI
+
+# Named volumes — Docker manages where data is stored on disk
+volumes:
+  postgres_data:
+  redis_data:

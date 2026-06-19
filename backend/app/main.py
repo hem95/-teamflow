@@ -1,0 +1,65 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from contextlib import asynccontextmanager
+from app.config import settings
+from app.database import engine, Base
+
+# Import all models so SQLAlchemy knows about the tables before creating them
+import app.models  # noqa: F401
+
+# Import routers
+from app.api import auth, workspaces, channels, messages, websocket
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Runs on startup and shutdown."""
+    # Create all database tables if they don't exist yet
+    # In production you'd use Alembic migrations instead
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    print("✓ Database tables ready")
+    yield
+    # Cleanup on shutdown
+    await engine.dispose()
+    print("✓ Database connections closed")
+
+
+app = FastAPI(
+    title=settings.APP_NAME,
+    description="A Slack-like team communication platform",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+# ── CORS Middleware ────────────────────────────────────────────────────────────
+# CORS = Cross-Origin Resource Sharing
+# Browsers block requests from one domain to another unless the server allows it
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # open for development — restrict to your domain in production
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── API Routes ─────────────────────────────────────────────────────────────────
+# All REST endpoints are prefixed with /api
+app.include_router(auth.router,        prefix="/api")
+app.include_router(workspaces.router,  prefix="/api")
+app.include_router(channels.router,    prefix="/api")
+app.include_router(messages.router,    prefix="/api")
+
+# WebSocket (no /api prefix — browsers use ws:// not http://)
+app.include_router(websocket.router)
+
+
+@app.get("/api/health")
+async def health_check():
+    """Simple endpoint to check if the server is running."""
+    return {"status": "ok", "app": settings.APP_NAME}
+
+# Serve the frontend files directly from FastAPI
+# This means everything runs on port 8000 — no nginx needed, no CORS issues
+app.mount("/", StaticFiles(directory="/frontend", html=True), name="frontend")

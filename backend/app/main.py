@@ -2,8 +2,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from app.config import settings
 from app.database import engine, Base
+from app.core.limiter import limiter
 
 # Import all models so SQLAlchemy knows about the tables before creating them
 import app.models  # noqa: F401
@@ -32,6 +35,12 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+# ── Rate Limiting ───────────────────────────────────────────────────────────────
+# Register the limiter so individual routes can use @limiter.limit(...).
+# When someone exceeds a limit, _rate_limit_exceeded_handler returns a 429 error.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # ── CORS Middleware ────────────────────────────────────────────────────────────
 # CORS = Cross-Origin Resource Sharing

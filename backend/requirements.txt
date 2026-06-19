@@ -19,6 +19,9 @@ bcrypt==4.0.1                      # Pin to version compatible with passlib
 # Redis (for scaling WebSockets across multiple servers)
 redis[asyncio]==5.2.0
 
+# Rate limiting — caps how many requests one IP can make in a time window
+slowapi==0.1.9
+
 # Utilities
 python-multipart==0.0.19       # Required for form data (file uploads later)
 httpx==0.28.0                  # HTTP client for testing

@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.database import get_db
+from app.core.limiter import limiter
 from app.models.user import User
 from app.models.channel import ChannelMember
 from app.models.message import Message
@@ -85,7 +86,9 @@ async def get_messages(
 
 
 @router.post("", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("30/minute")   # max 30 messages per minute per IP — stops spam flooding
 async def send_message(
+    request: Request,
     channel_id: int,
     body: MessageCreate,
     current_user: User = Depends(get_current_user),

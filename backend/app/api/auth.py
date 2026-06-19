@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from app.database import get_db
+from app.core.limiter import limiter
 from app.models.user import User
 from app.schemas.user import UserCreate, UserLogin, TokenResponse, UserResponse, RefreshRequest
 from app.core.security import hash_password, verify_password, create_access_token, create_refresh_token, decode_token
@@ -23,7 +24,8 @@ def slugify(text: str) -> str:
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-async def register(body: UserCreate, db: AsyncSession = Depends(get_db)):
+@limiter.limit("3/minute")   # max 3 new accounts per minute per IP — stops spam signups
+async def register(request: Request, body: UserCreate, db: AsyncSession = Depends(get_db)):
     """
     Create a new account.
     1. Check email & username aren't taken
@@ -58,7 +60,8 @@ async def register(body: UserCreate, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: UserLogin, db: AsyncSession = Depends(get_db)):
+@limiter.limit("5/minute")   # max 5 login attempts per minute per IP — stops brute force
+async def login(request: Request, body: UserLogin, db: AsyncSession = Depends(get_db)):
     """
     Log in with email + password.
     Returns a fresh pair of tokens on success.

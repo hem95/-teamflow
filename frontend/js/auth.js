@@ -31,6 +31,11 @@ async function handleLogin(event) {
       body: JSON.stringify({ email, password }),
     });
 
+    if (res.status === 429) {
+      showError("login-error", "Too many login attempts. Please wait a minute and try again.");
+      return;
+    }
+
     const data = await res.json();
 
     if (!res.ok) {
@@ -62,6 +67,11 @@ async function handleRegister(event) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ display_name, username, email, password }),
     });
+
+    if (res.status === 429) {
+      showError("reg-error", "Too many signup attempts. Please wait a minute and try again.");
+      return;
+    }
 
     const data = await res.json();
 
